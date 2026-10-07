@@ -7,6 +7,7 @@ import time
 from .agent import BazaarAgent
 from .config import Config
 from .market import BazaarError, fetch_quotes
+from .model import train
 from .notify import Discord
 from .store import Store
 from .strategy import margin_per_unit
@@ -56,6 +57,40 @@ def cmd_stats(cfg, args):
         print(f"  {item:28} {wins}/{trades} wins  avg margin {avg:.1%}")
 
 
+def cmd_train(cfg, args):
+    """Backtest + (re)train the win-probability model from bazaar.db."""
+    print(train(Store(cfg.data_dir / "bazaar.db"), cfg))
+
+
+def cmd_analyze(cfg, args):
+    """Ask Claude to review the current candidates (uses the Anthropic API; costs tokens)."""
+    from .analyst import Analyst
+    agent = BazaarAgent(cfg)
+    while True:
+        try:
+            now = time.time()
+            quotes = agent.perceive()
+            agent.update(quotes, now)
+            picks = agent.decide(quotes, now)
+            if not picks:
+                print("No candidates pass the filters yet (history is still warming up).")
+            else:
+                text = Analyst(agent, picks).run()
+                print(f"\n{text}\n")
+                if args.discord:
+                    agent.discord.send("analysis", f"**Bazaar analyst**\n{text}"[:1900])
+        except BazaarError as e:
+            logging.error("%s", e)
+        except RuntimeError as e:
+            sys.exit(str(e))
+        if not args.every:
+            return
+        try:
+            time.sleep(args.every * 60)
+        except KeyboardInterrupt:
+            return
+
+
 def cmd_alert(cfg, args):
     """Notify on Discord when an item's price crosses a threshold."""
     name = args.name.strip().upper()
@@ -89,6 +124,12 @@ def main():
     i = sub.add_parser("item", help="show one product")
     i.add_argument("name")
     i.set_defaults(fn=cmd_item)
+    tr = sub.add_parser("train", help="backtest and retrain the win-probability model")
+    tr.set_defaults(fn=cmd_train)
+    an = sub.add_parser("analyze", help="Claude reviews the candidates with tools (costs API tokens)")
+    an.add_argument("--every", type=int, default=0, help="repeat every N minutes (default: once)")
+    an.add_argument("--discord", action="store_true", help="also post the analysis to Discord")
+    an.set_defaults(fn=cmd_analyze)
     st = sub.add_parser("stats", help="database size and recommendation outcomes")
     st.add_argument("-n", type=int, default=10)
     st.set_defaults(fn=cmd_stats)

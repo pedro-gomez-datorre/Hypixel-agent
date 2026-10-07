@@ -60,6 +60,7 @@ class Pick:
     profit_day: float
     risk: float
     score: float
+    p_win: float | None = None   # model's probability the margin survives the horizon
 
 
 def evaluate(q: Quote, hist: deque, fail_rate: float, cfg: Config) -> Pick | None:

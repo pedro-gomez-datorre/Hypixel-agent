@@ -1,1 +1,7 @@
 requests>=2.31
+# Machine learning (python -m bazaar_agent train; used automatically by `run` when validated)
+scikit-learn>=1.4
+numpy>=1.26
+joblib>=1.3
+# Claude analyst (python -m bazaar_agent analyze)
+anthropic>=1.0

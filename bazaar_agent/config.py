@@ -41,6 +41,12 @@ class Config:
     alert_cooldown: int = 3600        # seconds between Discord alerts for the same item
     alert_min_ppu: float = 100_000
     alert_min_qty: float = 5_000
+    label_horizon: int = 3600         # seconds ahead when labelling training examples
+    min_train_rows: int = 500         # below this the model is not trained
+    retrain_interval: int = 86400     # seconds between automatic retrains in `run`
+    min_auc_gain: float = 0.01        # model must beat the heuristic baseline by this much (AUC)
+    analyst_model: str = "claude-opus-5-5"
+    analyst_language: str = "español"
     data_dir: Path = Path("data")
 
     @classmethod
@@ -55,5 +61,7 @@ class Config:
             poll_seconds=_env("POLL_SECONDS", d.poll_seconds, int),
             top_n=_env("TOP_N", d.top_n, int),
             capture=_env("CAPTURE", d.capture, float),
+            analyst_model=_env("ANALYST_MODEL", d.analyst_model),
+            analyst_language=_env("ANALYST_LANGUAGE", d.analyst_language),
             data_dir=Path(_env("DATA_DIR", str(d.data_dir))),
         )
