@@ -92,3 +92,16 @@ def test_analyst_loop_runs_tools_and_returns_text(tmp_path):
     picks = [evaluate(q, [(0, 1000, 1100)], 0.0, agent.cfg)]
     assert picks[0]
     assert Analyst(agent, picks, client=FakeClient()).run() == "FLIP I0"
+
+
+def test_report_flags_spikes_and_short_history(tmp_path):
+    from bazaar_agent.report import review
+    agent = BazaarAgent(Config(data_dir=tmp_path, min_samples=1))
+    for k in range(10):  # usual margin ~5%, then a spike
+        agent.history["S"].append((k, 1000, 1070))
+    agent.history["S"].append((10, 1000, 1300))
+    spike = evaluate(Quote("S", 1000, 1300, 5000, 5000), agent.history["S"], 0.0, agent.cfg)
+    assert review(agent, spike)[0] == "skip"
+    agent.history["N"].append((0, 1000, 1100))
+    new = evaluate(Quote("N", 1000, 1100, 5000, 5000), agent.history["N"], 0.0, agent.cfg)
+    assert review(agent, new)[0] == "watch"

@@ -62,6 +62,17 @@ def cmd_train(cfg, args):
     print(train(Store(cfg.data_dir / "bazaar.db"), cfg))
 
 
+def cmd_report(cfg, args):
+    """Rule-based review of the candidates: no API key, no cost."""
+    from .report import render
+    agent = BazaarAgent(cfg)
+    now = time.time()
+    quotes = agent.perceive()
+    agent.update(quotes, now)
+    picks = agent.decide(quotes, now)
+    print(render(agent, picks) if picks else "No candidates pass the filters yet (history is warming up).")
+
+
 def cmd_analyze(cfg, args):
     """Ask Claude to review the current candidates (uses the Anthropic API; costs tokens)."""
     from .analyst import Analyst
@@ -126,6 +137,8 @@ def main():
     i.set_defaults(fn=cmd_item)
     tr = sub.add_parser("train", help="backtest and retrain the win-probability model")
     tr.set_defaults(fn=cmd_train)
+    rp = sub.add_parser("report", help="rule-based review of the candidates (free, no API key)")
+    rp.set_defaults(fn=cmd_report)
     an = sub.add_parser("analyze", help="Claude reviews the candidates with tools (costs API tokens)")
     an.add_argument("--every", type=int, default=0, help="repeat every N minutes (default: once)")
     an.add_argument("--discord", action="store_true", help="also post the analysis to Discord")
