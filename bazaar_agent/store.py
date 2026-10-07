@@ -1,0 +1,77 @@
+"""SQLite persistence: price snapshots, recommendations, pending outcomes and learning stats."""
+import sqlite3
+from pathlib import Path
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS prices (
+    ts REAL NOT NULL, item TEXT NOT NULL, bid REAL NOT NULL, ask REAL NOT NULL,
+    buy_flow REAL NOT NULL, sell_flow REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS prices_item_ts ON prices(item, ts);
+CREATE TABLE IF NOT EXISTS recommendations (
+    ts REAL NOT NULL, item TEXT NOT NULL, bid REAL, ask REAL, qty REAL, ppu REAL,
+    margin_pct REAL, profit_day REAL, risk REAL, confidence REAL
+);
+CREATE TABLE IF NOT EXISTS pending (
+    item TEXT PRIMARY KEY, made_at REAL NOT NULL, margin_pct REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS learning (
+    item TEXT PRIMARY KEY, trades INTEGER, wins INTEGER, losses INTEGER, avg_margin_pct REAL
+);
+"""
+
+
+class Store:
+    def __init__(self, path: Path | str):
+        if str(path) != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(str(path))
+        self.db.executescript(SCHEMA)
+
+    def close(self) -> None:
+        self.db.close()
+
+    # prices
+    def add_prices(self, ts: float, rows) -> None:
+        """rows: iterable of (item, bid, ask, buy_flow, sell_flow)."""
+        with self.db:
+            self.db.executemany("INSERT INTO prices VALUES (?,?,?,?,?,?)",
+                                [(ts, *r) for r in rows])
+
+    def recent_prices(self, item: str, limit: int) -> list[tuple[float, float, float]]:
+        """Last ``limit`` (ts, bid, ask) samples for ``item``, oldest first."""
+        rows = self.db.execute(
+            "SELECT ts, bid, ask FROM prices WHERE item=? ORDER BY ts DESC LIMIT ?",
+            (item, limit)).fetchall()
+        return rows[::-1]
+
+    def items_with_prices(self) -> list[str]:
+        return [r[0] for r in self.db.execute("SELECT DISTINCT item FROM prices")]
+
+    # recommendations
+    def add_recommendation(self, ts: float, item: str, *values) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO recommendations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (ts, item, *values))
+
+    # pending outcomes
+    def load_pending(self) -> dict[str, tuple[float, float]]:
+        return {i: (t, m) for i, t, m in self.db.execute("SELECT item, made_at, margin_pct FROM pending")}
+
+    def save_pending(self, item: str, made_at: float, margin_pct: float) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO pending VALUES (?,?,?)", (item, made_at, margin_pct))
+
+    def delete_pending(self, item: str) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM pending WHERE item=?", (item,))
+
+    # learning
+    def load_learning(self) -> dict[str, tuple[int, int, int, float]]:
+        return {r[0]: r[1:] for r in self.db.execute(
+            "SELECT item, trades, wins, losses, avg_margin_pct FROM learning")}
+
+    def save_learning(self, item: str, trades: int, wins: int, losses: int, avg: float) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO learning VALUES (?,?,?,?,?)",
+                            (item, trades, wins, losses, avg))

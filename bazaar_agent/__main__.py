@@ -8,6 +8,7 @@ from .agent import BazaarAgent
 from .config import Config
 from .market import BazaarError, fetch_quotes
 from .notify import Discord
+from .store import Store
 from .strategy import margin_per_unit
 
 
@@ -37,6 +38,22 @@ def cmd_item(cfg, args):
     print(f"{name}\n  buy order (bid): {q.bid:,.1f}\n  sell offer (ask): {q.ask:,.1f}\n"
           f"  net profit/unit: {ppu:,.1f} ({ppu / q.bid:.1%})\n"
           f"  flow/day: buy {q.buy_flow:,.0f} | sell {q.sell_flow:,.0f}")
+
+
+def cmd_stats(cfg, args):
+    """What the database holds and how past recommendations turned out."""
+    db = Store(cfg.data_dir / "bazaar.db").db
+    n_prices, first, last = db.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM prices").fetchone()
+    n_recs = db.execute("SELECT COUNT(*) FROM recommendations").fetchone()[0]
+    print(f"price rows: {n_prices:,}  recommendations: {n_recs:,}")
+    if n_prices:
+        print(f"price data spans {(last - first) / 3600:.1f} h")
+    t, w = db.execute("SELECT COALESCE(SUM(trades),0), COALESCE(SUM(wins),0) FROM learning").fetchone()
+    print(f"judged recommendations: {t}" + (f"  win rate {w / t:.0%}" if t else ""))
+    rows = db.execute("SELECT item, trades, wins, avg_margin_pct FROM learning "
+                      "ORDER BY trades DESC LIMIT ?", (args.n,)).fetchall()
+    for item, trades, wins, avg in rows:
+        print(f"  {item:28} {wins}/{trades} wins  avg margin {avg:.1%}")
 
 
 def cmd_alert(cfg, args):
@@ -72,6 +89,9 @@ def main():
     i = sub.add_parser("item", help="show one product")
     i.add_argument("name")
     i.set_defaults(fn=cmd_item)
+    st = sub.add_parser("stats", help="database size and recommendation outcomes")
+    st.add_argument("-n", type=int, default=10)
+    st.set_defaults(fn=cmd_stats)
     a = sub.add_parser("alert", help="Discord alert when a price crosses a threshold")
     a.add_argument("name")
     g = a.add_mutually_exclusive_group(required=True)

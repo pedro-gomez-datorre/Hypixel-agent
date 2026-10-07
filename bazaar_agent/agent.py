@@ -1,5 +1,4 @@
 """The agent loop: perceive -> update -> decide -> act."""
-import csv
 import logging
 import time
 from collections import defaultdict, deque
@@ -7,29 +6,40 @@ from datetime import datetime
 
 from .config import Config
 from .market import BazaarError, Quote, fetch_quotes
-from .memory import Memory
+from .memory import Memory, import_learning_csv
 from .notify import Discord
+from .store import Store
 from .strategy import Pick, evaluate, margin_per_unit
 
 log = logging.getLogger(__name__)
-LOG_FIELDS = ["time", "item", "bid", "ask", "qty", "ppu", "margin_pct", "profit_day", "risk", "confidence"]
 
 
 class BazaarAgent:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, store: Store | None = None):
         self.cfg = cfg
+        self.store = store or Store(cfg.data_dir / "bazaar.db")
         self.history: dict[str, deque] = defaultdict(lambda: deque(maxlen=cfg.history_len))
-        self.memory = Memory(cfg.data_dir / "learning.csv", cfg.outcome_horizon, cfg.min_margin)
+        for item in self.store.items_with_prices():  # warm start from stored snapshots
+            self.history[item].extend(
+                (ts, bid, ask) for ts, bid, ask in self.store.recent_prices(item, cfg.history_len))
+        import_learning_csv(cfg.data_dir / "learning.csv", self.store)
+        self.memory = Memory(self.store, cfg.outcome_horizon, cfg.min_margin)
         self.discord = Discord(cfg.discord_webhook, cfg.alert_cooldown)
-        self.log_path = cfg.data_dir / "recommendations.csv"
         self._last_logged: dict[str, float] = {}
+        self._last_snapshot = max((h[-1][0] for h in self.history.values() if h), default=0.0)
 
     def perceive(self) -> dict[str, Quote]:
         return fetch_quotes(self.cfg.api_key)
 
     def update(self, quotes: dict[str, Quote], now: float) -> None:
-        for name, q in quotes.items():
-            self.history[name].append((now, q.bid, q.ask))
+        if now - self._last_snapshot >= self.cfg.snapshot_interval:
+            self._last_snapshot = now
+            rows = []
+            for name, q in quotes.items():
+                self.history[name].append((now, q.bid, q.ask))
+                if margin_per_unit(q, self.cfg.tax) > 0 and min(q.buy_flow, q.sell_flow) >= self.cfg.min_daily_volume:
+                    rows.append((name, q.bid, q.ask, q.buy_flow, q.sell_flow))
+            self.store.add_prices(now, rows)  # only plausible flips: keeps the DB small
         current = {n: (margin_per_unit(q, self.cfg.tax) / q.bid if q.bid else None) for n, q in quotes.items()}
         self.memory.resolve(now, current)
 
@@ -46,7 +56,7 @@ class BazaarAgent:
             self.memory.watch(p.name, now, p.margin_pct)
             conf = self.memory.get(p.name).confidence
             if now - self._last_logged.get(p.name, 0) >= self.cfg.log_cooldown:
-                self._log(p, conf)
+                self._log(now, p, conf)
                 self._last_logged[p.name] = now
             if p.ppu >= self.cfg.alert_min_ppu and p.qty >= self.cfg.alert_min_qty:
                 self.discord.send(p.name, (
@@ -56,16 +66,9 @@ class BazaarAgent:
                     f"Profit/day {p.profit_day:,.0f} | Risk {p.risk:.0f}"))
         self._print(picks)
 
-    def _log(self, p: Pick, conf: float) -> None:
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        new = not self.log_path.is_file()
-        with self.log_path.open("a", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            if new:
-                w.writerow(LOG_FIELDS)
-            w.writerow([datetime.now().isoformat(timespec="seconds"), p.name, p.bid, p.ask,
-                        int(p.qty), round(p.ppu, 2), round(p.margin_pct, 4),
-                        int(p.profit_day), int(p.risk), round(conf, 2)])
+    def _log(self, now: float, p: Pick, conf: float) -> None:
+        self.store.add_recommendation(now, p.name, p.bid, p.ask, p.qty, p.ppu, p.margin_pct,
+                                      p.profit_day, p.risk, conf)
 
     def _print(self, picks: list[Pick]) -> None:
         print(f"\n{datetime.now():%H:%M:%S}  top {len(picks)} flips "

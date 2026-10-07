@@ -4,6 +4,7 @@ from bazaar_agent.agent import BazaarAgent
 from bazaar_agent.config import Config
 from bazaar_agent.market import Quote, parse_quote
 from bazaar_agent.memory import Memory
+from bazaar_agent.store import Store
 from bazaar_agent.strategy import evaluate, margin_per_unit
 
 CFG = Config(min_samples=1)
@@ -48,7 +49,8 @@ def test_quantity_capped_by_purse():
 
 
 def test_memory_judges_once_after_horizon(tmp_path):
-    m = Memory(tmp_path / "l.csv", horizon=100, min_margin=0.02)
+    db = tmp_path / "t.db"
+    m = Memory(Store(db), horizon=100, min_margin=0.02)
     m.watch("A", 0, 0.10)
     m.watch("A", 50, 0.10)                      # duplicate must not reset or double count
     assert m.resolve(99, {"A": 0.10}) == 0
@@ -57,13 +59,31 @@ def test_memory_judges_once_after_horizon(tmp_path):
     m.watch("B", 0, 0.10)
     m.resolve(200, {"B": 0.01})                 # margin collapsed -> loss
     assert m.get("B").losses == 1
-    assert Memory(tmp_path / "l.csv", 100, 0.02).get("A").wins == 1  # persisted
+    assert Memory(Store(db), 100, 0.02).get("A").wins == 1  # persisted
 
 
-def test_agent_survives_webhook_and_fetch_errors(tmp_path, monkeypatch):
+def test_pending_survives_restart(tmp_path):
+    db = tmp_path / "t.db"
+    Memory(Store(db), 100, 0.02).watch("A", 0, 0.10)
+    m2 = Memory(Store(db), 100, 0.02)
+    assert "A" in m2.pending and m2.resolve(150, {"A": 0.10}) == 1
+
+
+def test_store_recent_prices_ordered_and_limited():
+    s = Store(":memory:")
+    for t in range(5):
+        s.add_prices(t, [("X", 1, 2 + t, 10, 10)])
+    assert [r[0] for r in s.recent_prices("X", 3)] == [2, 3, 4]
+
+
+def test_agent_snapshots_warm_start_and_survives_errors(tmp_path, monkeypatch):
     cfg = Config(min_samples=1, data_dir=tmp_path, discord_webhook="http://127.0.0.1:1/x",
                  alert_min_ppu=0, alert_min_qty=0)
     agent = BazaarAgent(cfg)
     monkeypatch.setattr(agent, "perceive", lambda: {"X": q()})
-    assert len(agent.step()) == 1
-    assert (tmp_path / "recommendations.csv").is_file()
+    assert len(agent.step()) == 1                     # dead webhook must not raise
+    assert agent.store.recent_prices("X", 10)         # snapshot stored
+    assert agent.store.db.execute("SELECT COUNT(*) FROM recommendations").fetchone()[0] == 1
+    agent.store.close()
+    again = BazaarAgent(cfg)                          # restart: history comes from the DB
+    assert len(again.history["X"]) == 1

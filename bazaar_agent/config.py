@@ -33,7 +33,8 @@ class Config:
     min_margin: float = 0.02          # minimum net margin (2%)
     max_margin: float = 0.50          # above this the spread is treated as manipulation
     max_invest_frac: float = 0.20     # max share of the purse in a single item
-    history_len: int = 120            # price samples kept per item (~1h at 30s)
+    snapshot_interval: int = 300      # seconds between stored price snapshots (also history step)
+    history_len: int = 120            # snapshots kept per item in memory (~10h at 5 min)
     min_samples: int = 3              # samples needed before an item can be recommended
     outcome_horizon: int = 3600       # seconds until a recommendation is judged
     log_cooldown: int = 900           # seconds between log rows for the same item
