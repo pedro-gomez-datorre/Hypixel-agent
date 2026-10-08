@@ -9,6 +9,7 @@ from .config import Config
 from .market import BazaarError, fetch_quotes
 from .model import train
 from .notify import Discord
+from . import trades
 from .store import Store
 from .strategy import margin_per_unit
 
@@ -102,6 +103,31 @@ def cmd_analyze(cfg, args):
             return
 
 
+def cmd_trade(cfg, args):
+    """Log a real flip step by step (open -> filled -> listed -> sold)."""
+    store = Store(cfg.data_dir / "bazaar.db")
+    if args.action == "list":
+        print(trades.summary(store, cfg.tax))
+        return
+    item = args.item.strip().upper()
+    try:
+        if args.action == "open":
+            if args.price is None or args.qty is None:
+                sys.exit("open needs --price and --qty")
+            trades.open_trade(store, item, args.qty, args.price, args.ago)
+        elif args.action == "filled":
+            trades.mark_filled(store, item, args.ago)
+        elif args.action == "listed":
+            if args.price is None:
+                sys.exit("listed needs --price (your sell offer per unit)")
+            trades.mark_listed(store, item, args.price, args.ago)
+        elif args.action == "sold":
+            trades.mark_sold(store, item, args.price, args.ago)
+    except ValueError as e:
+        sys.exit(str(e))
+    print(f"ok: {item} {args.action}")
+
+
 def cmd_alert(cfg, args):
     """Notify on Discord when an item's price crosses a threshold."""
     name = args.name.strip().upper()
@@ -137,6 +163,13 @@ def main():
     i.set_defaults(fn=cmd_item)
     tr = sub.add_parser("train", help="backtest and retrain the win-probability model")
     tr.set_defaults(fn=cmd_train)
+    td = sub.add_parser("trade", help="log your real flips (open/filled/listed/sold/list)")
+    td.add_argument("action", choices=["open", "filled", "listed", "sold", "list"])
+    td.add_argument("item", nargs="?", default="")
+    td.add_argument("--price", type=float, help="per-unit price (buy for open, sell for listed/sold)")
+    td.add_argument("--qty", type=int)
+    td.add_argument("--ago", type=float, default=0, help="minutes ago the step happened")
+    td.set_defaults(fn=cmd_trade)
     rp = sub.add_parser("report", help="rule-based review of the candidates (free, no API key)")
     rp.set_defaults(fn=cmd_report)
     an = sub.add_parser("analyze", help="Claude reviews the candidates with tools (costs API tokens)")

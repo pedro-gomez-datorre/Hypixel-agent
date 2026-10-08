@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS pending (
 CREATE TABLE IF NOT EXISTS learning (
     item TEXT PRIMARY KEY, trades INTEGER, wins INTEGER, losses INTEGER, avg_margin_pct REAL
 );
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT NOT NULL, qty INTEGER NOT NULL,
+    buy_price REAL NOT NULL, opened_at REAL NOT NULL, filled_at REAL,
+    sell_price REAL, listed_at REAL, sold_at REAL, sold_price REAL
+);
 """
 
 

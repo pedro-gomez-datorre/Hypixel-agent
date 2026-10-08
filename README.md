@@ -15,6 +15,7 @@ python -m bazaar_agent run
 | `python -m bazaar_agent run [--once]` | Agent loop: recommendations, CSV log, Discord alerts |
 | `python -m bazaar_agent stats` | Database size and how past recommendations turned out |
 | `python -m bazaar_agent train` | Backtest + retrain the win-probability model from `bazaar.db` |
+| `python -m bazaar_agent trade open ITEM --price P --qty N` | Log a real flip: then `filled`, `listed --price P`, `sold`, and `trade list` for results (`--ago MIN` backdates a step) |
 | `python -m bazaar_agent report` | Rule-based review of the candidates: free, no API key |
 | `python -m bazaar_agent analyze [--every 30] [--discord]` | Claude reviews the candidates with tools (costs API tokens) |
 | `python -m bazaar_agent top -n 10` | Raw top margins right now (replaces `main.py` / `Order.py`) |

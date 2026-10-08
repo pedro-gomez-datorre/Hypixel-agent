@@ -87,3 +87,21 @@ def test_agent_snapshots_warm_start_and_survives_errors(tmp_path, monkeypatch):
     agent.store.close()
     again = BazaarAgent(cfg)                          # restart: history comes from the DB
     assert len(again.history["X"]) == 1
+
+
+def test_trade_lifecycle_and_profit(tmp_path):
+    from bazaar_agent import trades
+    s = Store(tmp_path / "t.db")
+    trades.open_trade(s, "X", 64, 2000, ago=20)
+    trades.mark_filled(s, "X", ago=15)
+    trades.mark_listed(s, "X", 2900, ago=14)
+    import pytest
+    with pytest.raises(ValueError):
+        trades.mark_filled(s, "NOPE")
+    trades.mark_sold(s, "X", ago=0)
+    out = trades.summary(s, 0.0125)
+    profit = 64 * 2900 * 0.9875 - 64 * 2000
+    assert f"{profit:,.0f}" in out and "1 completed" in out
+    with pytest.raises(ValueError):  # steps must be in order
+        trades.open_trade(s, "Y", 1, 1)
+        trades.mark_listed(s, "Y", 5)
