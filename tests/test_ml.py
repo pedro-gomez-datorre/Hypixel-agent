@@ -132,3 +132,24 @@ def test_dashboard_data_functions(tmp_path):
     with pytest.raises(Exception):
         ro.db.execute("INSERT INTO pending VALUES ('a',1,1)")      # read-only: the dashboard can't write
     assert not ui.ITEM_RE.match("../etc") and ui.ITEM_RE.match("SAND:1")
+
+
+def test_order_book_maps_inverted_api_names_and_items_list(tmp_path, monkeypatch):
+    import time
+    from bazaar_agent import ui
+    products = {"X": {
+        "sell_summary": [{"amount": 50, "pricePerUnit": 100.0, "orders": 2}, {"amount": 400, "pricePerUnit": 98.0, "orders": 5},
+                         {"amount": 900, "pricePerUnit": 80.0, "orders": 9}],      # buy orders, highest first
+        "buy_summary": [{"amount": 30, "pricePerUnit": 120.0, "orders": 1}, {"amount": 70, "pricePerUnit": 121.0, "orders": 3}]}}
+    monkeypatch.setattr(ui, "_book_cache", {"t": time.time(), "products": products})
+    b = ui.order_book(Config(), "X")
+    assert b["buy_orders"][0]["price"] == 100.0 and b["sell_offers"][0]["price"] == 120.0
+    assert b["units_near_bid"] == 450 and b["units_near_ask"] == 100        # within 2% of each best price
+    assert "error" in ui.order_book(Config(), "NOPE")
+    cfg = Config(data_dir=tmp_path)
+    s = Store(tmp_path / "bazaar.db")
+    s.add_prices(1.0, [("A", 100, 130, 10, 20), ("B", 50, 52, 1, 2, 5, 1, 7, 2)])   # 5- and 9-field rows
+    s.close()
+    ro = ui.open_store(cfg)
+    assert [i["name"] for i in ui.items(cfg, ro)] == ["A", "B"]
+    assert ui.item_history(cfg, ro, "A", 0)["buy_flow"] == [10]

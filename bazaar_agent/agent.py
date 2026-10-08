@@ -42,9 +42,9 @@ class BazaarAgent:
             rows = []
             for name, q in quotes.items():
                 self.history[name].append((now, q.bid, q.ask))
-                if margin_per_unit(q, self.cfg.tax) > 0 and min(q.buy_flow, q.sell_flow) >= self.cfg.min_daily_volume:
-                    rows.append((name, q.bid, q.ask, q.buy_flow, q.sell_flow))
-            self.store.add_prices(now, rows)  # only plausible flips: keeps the DB small
+                rows.append((name, q.bid, q.ask, q.buy_flow, q.sell_flow,
+                             q.bid_amt, q.bid_orders, q.ask_amt, q.ask_orders))
+            self.store.add_prices(now, rows)  # every product, so any item can be charted
         current = {n: (margin_per_unit(q, self.cfg.tax) / q.bid if q.bid else None) for n, q in quotes.items()}
         self.memory.resolve(now, current)
 

@@ -16,7 +16,7 @@ python -m bazaar_agent run
 | `python -m bazaar_agent stats` | Database size and how past recommendations turned out |
 | `python -m bazaar_agent train` | Backtest + retrain the win-probability model from `bazaar.db` |
 | `python -m bazaar_agent trade open ITEM --price P --qty N` | Log a real flip: then `filled`, `listed --price P`, `sold`, and `trade list` for results (`--ago MIN` backdates a step) |
-| `python -m bazaar_agent ui` | Dashboard in your browser (read-only, localhost): candidates, price charts, your trades, model status |
+| `python -m bazaar_agent ui` | Dashboard in your browser (read-only, localhost): candidates, look up any item (price, volume, live order book), your trades, model status |
 | `python -m bazaar_agent report` | Rule-based review of the candidates: free, no API key |
 | `python -m bazaar_agent analyze [--every 30] [--discord]` | Claude reviews the candidates with tools (costs API tokens) |
 | `python -m bazaar_agent top -n 10` | Raw top margins right now (replaces `main.py` / `Order.py`) |
@@ -34,7 +34,7 @@ python -m bazaar_agent run
   still ≥ 2% and ≥ half of the original. Stats feed the risk score.
 
 Everything is stored in one SQLite file, `data/bazaar.db` (git-ignored): price snapshots every 5 min
-(only plausible flips), recommendations, pending outcomes and learning stats. The agent warm-starts its
+(every product, with best-level depth), recommendations, pending outcomes and learning stats. The agent warm-starts its
 price history from it, so restarts lose nothing. An old `data/learning.csv` is imported once. `legacy/` holds the CSVs from the first version; their
 "learning" counters were not meaningful (every recommendation counted as a win).
 

@@ -7,7 +7,7 @@ it dropped out of the plausible-flip set, which is a loss. If nothing was record
 was off) the example is unlabelled and skipped.
 """
 import math
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -49,12 +49,8 @@ class Dataset:
 
 
 def build(store: Store, cfg: Config) -> Dataset:
-    rows = store.db.execute(
-        "SELECT ts, item, bid, ask, buy_flow, sell_flow FROM prices ORDER BY ts").fetchall()
-    all_ts = sorted({r[0] for r in rows})
-    by_item: dict[str, list] = defaultdict(list)
-    for r in rows:
-        by_item[r[1]].append(r)
+    all_ts = sorted(r[0] for r in store.db.execute("SELECT DISTINCT ts FROM prices"))
+    items = [r[0] for r in store.db.execute("SELECT DISTINCT item FROM prices")]
 
     def recorded_between(lo: float, hi: float) -> bool:
         from bisect import bisect_left
@@ -63,7 +59,9 @@ def build(store: Store, cfg: Config) -> Dataset:
 
     H = cfg.label_horizon
     X, y, T = [], [], []
-    for item, snaps in by_item.items():
+    for item in items:  # one item at a time keeps memory flat however long the agent has been running
+        snaps = store.db.execute(
+            "SELECT ts, item, bid, ask, buy_flow, sell_flow FROM prices WHERE item=? ORDER BY ts", (item,)).fetchall()
         hist: deque = deque(maxlen=TRAIL)
         for i, (ts, _, bid, ask, bf, sf) in enumerate(snaps):
             hist.append((ts, bid, ask))

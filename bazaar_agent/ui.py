@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlparse
 from . import trades
 from .config import Config
 from .dataset import make_features
-from .market import Quote
+from .market import BazaarError, Quote, fetch_products
 from .memory import Memory
 from .model import Predictor
 from .report import review
@@ -28,6 +28,10 @@ from .strategy import evaluate
 PAGE = Path(__file__).with_name("ui.html")
 ITEM_RE = re.compile(r"^[A-Z0-9_:]{1,80}$")
 MAX_POINTS = 600
+BOOK_TTL = 20      # seconds a live order-book download is reused across requests
+BOOK_LEVELS = 10
+_book_cache: dict = {"t": 0.0, "products": None}
+_book_lock = threading.Lock()
 
 
 def open_store(cfg: Config) -> Store:
@@ -87,17 +91,57 @@ def candidates(cfg: Config, store: Store, limit: int = 60) -> dict:
     return {"ts": last, "total": len(picks), "items": items}
 
 
+def items(cfg: Config, store: Store) -> list[dict]:
+    """Every product in the latest snapshot, for search and for items that are not candidates."""
+    last = store.db.execute("SELECT MAX(ts) FROM prices").fetchone()[0]
+    if last is None:
+        return []
+    out = []
+    for item, bid, ask, bf, sf in store.db.execute(
+            "SELECT item, bid, ask, buy_flow, sell_flow FROM prices WHERE ts=? ORDER BY item", (last,)):
+        out.append({"name": item, "bid": bid, "ask": ask, "buy_flow": bf, "sell_flow": sf,
+                    "margin_pct": (ask * (1 - cfg.tax) - bid) / bid if bid else None})
+    return out
+
+
+def _levels(summary: list, n: int) -> list[dict]:
+    return [{"price": float(l["pricePerUnit"]), "amount": int(l.get("amount", 0)), "orders": int(l.get("orders", 0))}
+            for l in (summary or [])[:n]]
+
+
+def order_book(cfg: Config, item: str) -> dict:
+    """Live order book for one product (downloaded from the Hypixel API, cached for BOOK_TTL seconds).
+
+    The API names are inverted: ``sell_summary`` holds the BUY orders (highest first) and
+    ``buy_summary`` holds the SELL offers (lowest first).
+    """
+    with _book_lock:
+        if _book_cache["products"] is None or time.time() - _book_cache["t"] > BOOK_TTL:
+            _book_cache["products"] = fetch_products(cfg.api_key)
+            _book_cache["t"] = time.time()
+        products, fetched = _book_cache["products"], _book_cache["t"]
+    prod = products.get(item)
+    if not prod:
+        return {"item": item, "error": "not in the live bazaar"}
+    buys, sells = _levels(prod.get("sell_summary"), BOOK_LEVELS), _levels(prod.get("buy_summary"), BOOK_LEVELS)
+    near = lambda ls, best, sign: sum(l["amount"] for l in ls if sign * (l["price"] - best) / best <= 0.02) if ls else 0
+    return {"item": item, "fetched_at": fetched, "buy_orders": buys, "sell_offers": sells,
+            "units_near_bid": near(buys, buys[0]["price"], -1) if buys else 0,
+            "units_near_ask": near(sells, sells[0]["price"], 1) if sells else 0}
+
+
 def item_history(cfg: Config, store: Store, item: str, hours: float) -> dict:
     last = store.db.execute("SELECT MAX(ts) FROM prices WHERE item=?", (item,)).fetchone()[0]
     if last is None:
-        return {"item": item, "t": [], "bid": [], "ask": [], "margin": []}
+        return {"item": item, "t": [], "bid": [], "ask": [], "margin": [], "buy_flow": [], "sell_flow": []}
     since = 0 if hours <= 0 else last - hours * 3600
     rows = store.db.execute(
-        "SELECT ts, bid, ask FROM prices WHERE item=? AND ts>=? ORDER BY ts", (item, since)).fetchall()
+        "SELECT ts, bid, ask, buy_flow, sell_flow FROM prices WHERE item=? AND ts>=? ORDER BY ts", (item, since)).fetchall()
     step = max(1, -(-len(rows) // MAX_POINTS))
     rows = rows[::step]
     return {"item": item, "t": [r[0] * 1000 for r in rows], "bid": [r[1] for r in rows],
             "ask": [r[2] for r in rows],
+            "buy_flow": [r[3] for r in rows], "sell_flow": [r[4] for r in rows],
             "margin": [(r[2] * (1 - cfg.tax) - r[1]) / r[1] * 100 if r[1] else None for r in rows]}
 
 
@@ -134,6 +178,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(overview(self.cfg, store))
             if url.path == "/api/candidates":
                 return self._json(candidates(self.cfg, store))
+            if url.path == "/api/items":
+                return self._json(items(self.cfg, store))
+            if url.path == "/api/book":
+                item = (q.get("item") or [""])[0].upper()
+                if not ITEM_RE.match(item):
+                    return self._json({"error": "bad item"}, 400)
+                try:
+                    return self._json(order_book(self.cfg, item))
+                except (BazaarError, OSError, ValueError) as e:
+                    return self._json({"error": f"could not download the live order book: {e}"}, 502)
             if url.path == "/api/trades":
                 return self._json(trades.rows(store, self.cfg.tax))
             if url.path == "/api/history":

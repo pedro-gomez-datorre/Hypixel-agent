@@ -88,6 +88,7 @@ svg .lab { fill: var(--ink-2); }
   .kpis { grid-template-columns: 1fr 1fr; } .tile.hero { grid-column: 1 / -1; } .two { grid-template-columns: 1fr; }
   .hide-sm { display: none; }
 }
+.bar { position: relative; }
 .dim { opacity: .55; transition: opacity .15s; }
 </style>
 </head>
@@ -97,6 +98,8 @@ svg .lab { fill: var(--ink-2); }
     <h1>Bazaar Agent</h1>
     <span class="pill" id="status"><span class="dot" id="statusdot"></span><span id="statustext">connecting…</span></span>
     <span class="spacer"></span>
+    <input id="lookup" list="itemlist" placeholder="Look up any item…" aria-label="Look up any item" autocomplete="off" style="min-width:210px">
+    <datalist id="itemlist"></datalist>
     <button id="theme" type="button" aria-label="Toggle light and dark theme">Theme</button>
   </header>
 
@@ -142,9 +145,15 @@ svg .lab { fill: var(--ink-2); }
     </div>
     <div class="legend" id="d-legend"><span><i class="key" style="background:var(--s1)"></i>Buy order (bid)</span>
       <span><i class="key" style="background:var(--s2)"></i>Sell offer (ask)</span></div>
-    <div class="charts"><div id="c-price"></div><div id="c-margin"></div></div>
+    <div class="charts"><div id="c-price"></div><div id="c-margin"></div>
+      <div class="legend" id="d-legend2" style="margin-top:10px"><span><i class="key" style="background:var(--s1)"></i>Instant sells per day (fill buy orders)</span>
+      <span><i class="key" style="background:var(--s2)"></i>Instant buys per day (fill sell offers)</span></div>
+      <div id="c-flow"></div></div>
     <div id="d-table" class="tablewrap" hidden></div>
     <ul class="notes" id="d-notes"></ul>
+    <h2 style="margin-top:18px">Live order book</h2>
+    <p class="sub" id="b-sub">Loading…</p>
+    <div class="two" id="book"></div>
   </section>
 
   <section class="card">
@@ -298,7 +307,7 @@ function barChart(host, items) {
 }
 
 /* ---------- state + rendering ---------- */
-let showAll = false, cands = [], sortKey = null, sortDir = -1, selected = null, rangeH = 24, tableView = false, lastHist = null, lastTrades = [];
+let itemsMap = new Map(), showAll = false, cands = [], sortKey = null, sortDir = -1, selected = null, rangeH = 24, tableView = false, lastHist = null, lastTrades = [];
 const VERDICT_ICON = { flip: "M3 8.5l3 3 7-7", watch: "M8 3v6M8 12v.5", skip: "M4 4l8 8M12 4l-8 8" };
 function chip(v) {
   const s = el("span", { class: "chip " + v });
@@ -341,11 +350,36 @@ function renderCands() {
 
 async function select(name) {
   selected = name; renderCands();
-  const c = cands.find(x => x.name === name); $("#detail").hidden = false;
+  const c = cands.find(x => x.name === name), it = itemsMap.get(name); $("#detail").hidden = false;
   $("#d-title").textContent = name;
-  $("#d-sub").textContent = c ? `Margin ${pct(c.margin_pct)} · risk ${Math.round(c.risk)} · ~${fmt.format(c.qty)} units/day` : "";
+  $("#d-sub").textContent = c ? `${c.verdict[0].toUpperCase() + c.verdict.slice(1)} · margin ${pct(c.margin_pct)} · risk ${Math.round(c.risk)} · ~${fmt.format(c.qty)} units/day`
+    : it ? `Not in the candidate list right now · net margin ${it.margin_pct == null ? "–" : pct(it.margin_pct)} · ${fmt.format(Math.min(it.buy_flow, it.sell_flow))} units/day on the slower side`
+    : "No data for this item yet.";
   const ul = $("#d-notes"); ul.replaceChildren(); if (c) for (const n of c.notes) ul.append(el("li", {}, n));
+  loadBook(name);
   await loadHistory(); $("#detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+function bookTable(title, rows, color, best) {
+  const box = document.createElement("div"); box.append(el("div", { class: "sub" }, title));
+  const t = document.createElement("table"); t.innerHTML = "<thead><tr><th>Price</th><th>Units</th><th>Orders</th></tr></thead>";
+  const tb = document.createElement("tbody"), mx = Math.max(...rows.map(r => r.amount), 1);
+  for (const r of rows) { const tr = document.createElement("tr"); tr.style.cursor = "default";
+    const w = Math.round(r.amount / mx * 100);
+    const u = td(fmt.format(r.amount), "num bar"); u.style.background = `linear-gradient(to left, color-mix(in srgb, ${color} 24%, transparent) ${w}%, transparent ${w}%)`;
+    tr.append(td(fmt1.format(r.price) + (r === rows[0] ? "  ★" : ""), "num"), u, td(fmt.format(r.orders), "num")); tb.append(tr); }
+  t.append(tb); box.append(t); return box;
+}
+async function loadBook(name) {
+  const host = $("#book"); host.replaceChildren(); $("#b-sub").textContent = "Loading…";
+  try {
+    const b = await api(`/api/book?item=${encodeURIComponent(name)}`);
+    if (name !== selected) return;
+    if (b.error) { $("#b-sub").textContent = b.error; return; }
+    const age = Math.max(0, Math.round(Date.now() / 1000 - b.fetched_at));
+    $("#b-sub").textContent = `Top ${b.buy_orders.length} price levels per side, ${age}s old. ★ = best price. Units within 2% of the best price: ${fmt.format(b.units_near_bid)} buy orders · ${fmt.format(b.units_near_ask)} sell offers.`;
+    host.append(bookTable("Buy orders (you compete here when buying)", b.buy_orders, css("--s1")),
+                bookTable("Sell offers (you compete here when selling)", b.sell_offers, css("--s2")));
+  } catch (e) { if (name === selected) $("#b-sub").textContent = "Live order book unavailable: " + e.message; }
 }
 async function loadHistory() {
   if (!selected) return;
@@ -358,17 +392,21 @@ function drawHistory() {
     endLabels: true, series: [{ name: "Buy order (bid)", color: css("--s1"), values: h.bid }, { name: "Sell offer (ask)", color: css("--s2"), values: h.ask }] });
   lineChart($("#c-margin"), { x: h.t, height: 120, label: "Net margin percent", yFmt: v => v.toFixed(0) + "%", tipFmt: v => v.toFixed(1) + "%", area: true, zero: true,
     series: [{ name: "Net margin", color: css("--s1"), values: h.margin }] });
+  lineChart($("#c-flow"), { x: h.t, height: 130, label: "Instant sells and buys per day", yFmt: compact, tipFmt: v => fmt.format(v), zero: true,
+    series: [{ name: "Instant sells / day", color: css("--s1"), values: h.buy_flow }, { name: "Instant buys / day", color: css("--s2"), values: h.sell_flow }] });
   const tb = $("#d-table"); tb.replaceChildren();
-  const t = document.createElement("table"); t.innerHTML = "<thead><tr><th>Time</th><th>Bid</th><th>Ask</th><th>Margin</th></tr></thead>";
+  const t = document.createElement("table"); t.innerHTML = "<thead><tr><th>Time</th><th>Bid</th><th>Ask</th><th>Margin</th><th>Sells/day</th><th>Buys/day</th></tr></thead>";
   const body = document.createElement("tbody");
-  h.t.forEach((ms, i) => { const tr = document.createElement("tr"); tr.append(td(new Date(ms).toLocaleString(), "num"), td(fmt1.format(h.bid[i]), "num"), td(fmt1.format(h.ask[i]), "num"), td(h.margin[i] == null ? "–" : h.margin[i].toFixed(1) + "%", "num")); body.prepend(tr); });
+  h.t.forEach((ms, i) => { const tr = document.createElement("tr"); tr.append(td(new Date(ms).toLocaleString(), "num"), td(fmt1.format(h.bid[i]), "num"), td(fmt1.format(h.ask[i]), "num"), td(h.margin[i] == null ? "–" : h.margin[i].toFixed(1) + "%", "num"), td(fmt.format(h.buy_flow[i]), "num"), td(fmt.format(h.sell_flow[i]), "num")); body.prepend(tr); });
   t.append(body); tb.append(t);
-  $("#d-table").hidden = !tableView; $("#c-price").hidden = $("#c-margin").hidden = $("#d-legend").hidden = tableView;
+  $("#d-table").hidden = !tableView; for (const id of ["#c-price", "#c-margin", "#c-flow", "#d-legend", "#d-legend2"]) $(id).hidden = tableView;
 }
 $("#ranges").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return;
   if (b.id === "d-table-btn") { tableView = !tableView; b.setAttribute("aria-pressed", tableView); drawHistory(); return; }
   rangeH = +b.dataset.h; document.querySelectorAll("#ranges [data-h]").forEach(x => x.setAttribute("aria-pressed", x === b)); loadHistory(); });
 document.querySelectorAll("#cands th").forEach(th => th.onclick = () => { const k = th.dataset.k; sortDir = sortKey === k ? -sortDir : -1; sortKey = k; renderCands(); });
+$("#lookup").addEventListener("change", e => { const v = e.target.value.trim().toUpperCase().replace(/ /g, "_");
+  if (itemsMap.has(v)) { select(v); e.target.value = ""; } });
 $("#showall").onclick = () => { showAll = !showAll; renderCands(); };
 $("#search").oninput = renderCands; $("#vfilter").onchange = renderCands;
 
@@ -389,7 +427,9 @@ function redrawAll() { drawHistory(); drawTrades(); renderCands(); }
 
 async function refresh() {
   try {
-    const [o, c, t] = await Promise.all([api("/api/overview"), api("/api/candidates"), api("/api/trades")]);
+    const [o, c, t, all] = await Promise.all([api("/api/overview"), api("/api/candidates"), api("/api/trades"), api("/api/items")]);
+    itemsMap = new Map(all.map(i => [i.name, i]));
+    const dl = $("#itemlist"); if (dl.children.length !== all.length) dl.replaceChildren(...all.map(i => { const o = document.createElement("option"); o.value = i.name; return o; }));
     showError("");
     const age = o.last_snapshot ? (o.now - o.last_snapshot) / 60 : null;
     const dot = $("#statusdot"); dot.className = "dot " + (age == null ? "bad" : age < 12 ? "ok" : "stale");

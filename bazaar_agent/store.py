@@ -37,16 +37,27 @@ class Store:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path))
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(prices)")}
+        with self.db:
+            for col in ("bid_amt", "bid_orders", "ask_amt", "ask_orders"):
+                if col not in have:
+                    self.db.execute(f"ALTER TABLE prices ADD COLUMN {col} REAL")
 
     def close(self) -> None:
         self.db.close()
 
     # prices
     def add_prices(self, ts: float, rows) -> None:
-        """rows: iterable of (item, bid, ask, buy_flow, sell_flow)."""
+        """rows: (item, bid, ask, buy_flow, sell_flow[, bid_amt, bid_orders, ask_amt, ask_orders])."""
+        padded = [(ts, *r, *([None] * (9 - len(r)))) for r in rows]
         with self.db:
-            self.db.executemany("INSERT INTO prices VALUES (?,?,?,?,?,?)",
-                                [(ts, *r) for r in rows])
+            self.db.executemany(
+                "INSERT INTO prices (ts, item, bid, ask, buy_flow, sell_flow, bid_amt, bid_orders, ask_amt, ask_orders) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)", padded)
 
     def recent_prices(self, item: str, limit: int) -> list[tuple[float, float, float]]:
         """Last ``limit`` (ts, bid, ask) samples for ``item``, oldest first."""
