@@ -105,3 +105,27 @@ def test_trade_lifecycle_and_profit(tmp_path):
     with pytest.raises(ValueError):  # steps must be in order
         trades.open_trade(s, "Y", 1, 1)
         trades.mark_listed(s, "Y", 5)
+
+
+def test_trade_done_cancel_and_realization(tmp_path):
+    import pytest
+    import time
+    from bazaar_agent import trades
+    s = Store(tmp_path / "t.db")
+    now = time.time()
+    s.add_prices(now - 3600, [("A", 1000, 1500, 5000, 5000), ("B", 1000, 1500, 5000, 5000), ("C", 1000, 1500, 5000, 5000),
+                              ("D", 1000, 1500, 5000, 5000)])
+    for item in "ABC":
+        trades.done_trade(s, item, 10, 1000, 1400, fill_min=2, sell_min=5)   # opened 7 min ago, after the snapshot
+    pred = (1500 * 0.9875 - 1000) / 1000
+    realized = (1400 * 0.9875 - 1000) / 1000
+    real = trades.realization(s, 0.0125)
+    assert real and real[1] == 3 and real[0] == pytest.approx(realized / pred)
+    assert trades.realization(s, 0.0125, min_trades=4) is None              # needs enough trades
+    trades.open_trade(s, "D", 2, 1000); trades.mark_filled(s, "D"); trades.mark_listed(s, "D", 1450, ago=30)
+    trades.mark_cancelled(s, "D")
+    out = trades.summary(s, 0.0125)
+    assert "cancelled after waiting 30 min" in out and "3 completed, 1 cancelled" in out
+    assert trades.active(s, "D") is None                                     # cancelled trades are closed
+    with pytest.raises(ValueError):
+        trades.mark_cancelled(s, "D")

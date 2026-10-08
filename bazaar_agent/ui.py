@@ -44,14 +44,15 @@ def overview(cfg: Config, store: Store) -> dict:
     judged, wins = store.db.execute(
         "SELECT COALESCE(SUM(trades),0), COALESCE(SUM(wins),0) FROM learning").fetchone()
     pred = Predictor.load(cfg)
-    done = [r for r in trades.rows(store, cfg.tax) if r["profit"] is not None]
+    all_trades = trades.rows(store, cfg.tax)
+    done = [r for r in all_trades if r["profit"] is not None]
     cost = sum(r["cost"] for r in done)
     return {
         "now": time.time(), "last_snapshot": last,
         "data_hours": ((last - first) / 3600) if first else 0,
         "price_rows": n_prices, "recommendations": n_recs, "judged": judged, "judged_wins": wins,
         "model": pred.summary() if pred else None,
-        "trades_done": len(done), "profit": sum(r["profit"] for r in done), "invested": cost,
+        "trades_done": len(done), "trades_cancelled": sum(r["stage"] == "cancelled" for r in all_trades), "profit": sum(r["profit"] for r in done), "invested": cost,
         "avg_fill_min": sum(r["fill_min"] for r in done) / len(done) if done else None,
         "avg_sell_min": sum(r["sell_min"] for r in done) / len(done) if done else None,
     }
@@ -88,7 +89,9 @@ def candidates(cfg: Config, store: Store, limit: int = 60) -> dict:
         items.append({"name": p.name, "bid": p.bid, "ask": p.ask, "ppu": p.ppu, "margin_pct": p.margin_pct,
                       "qty": p.qty, "profit_day": p.profit_day, "risk": p.risk, "p_win": p.p_win,
                       "verdict": verdict, "notes": notes, "judged": rec.trades, "wins": rec.wins})
-    return {"ts": last, "total": len(picks), "items": items}
+    real = trades.realization(store, cfg.tax)
+    return {"ts": last, "total": len(picks), "items": items,
+            "realization": {"factor": real[0], "n": real[1]} if real else None}
 
 
 def items(cfg: Config, store: Store) -> list[dict]:

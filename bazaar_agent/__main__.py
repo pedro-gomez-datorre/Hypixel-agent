@@ -115,6 +115,15 @@ def cmd_trade(cfg, args):
             if args.price is None or args.qty is None:
                 sys.exit("open needs --price and --qty")
             trades.open_trade(store, item, args.qty, args.price, args.ago)
+        elif args.action == "done":
+            need = {"--qty": args.qty, "--buy": args.buy, "--sell": args.sell,
+                    "--fill-min": args.fill_min, "--sell-min": args.sell_min}
+            missing = [k for k, v in need.items() if v is None]
+            if missing:
+                sys.exit("done needs " + ", ".join(missing))
+            trades.done_trade(store, item, args.qty, args.buy, args.sell, args.fill_min, args.sell_min)
+        elif args.action == "cancel":
+            trades.mark_cancelled(store, item, args.ago)
         elif args.action == "filled":
             trades.mark_filled(store, item, args.ago)
         elif args.action == "listed":
@@ -170,11 +179,15 @@ def main():
     tr = sub.add_parser("train", help="backtest and retrain the win-probability model")
     tr.set_defaults(fn=cmd_train)
     td = sub.add_parser("trade", help="log your real flips (open/filled/listed/sold/list)")
-    td.add_argument("action", choices=["open", "filled", "listed", "sold", "list"])
+    td.add_argument("action", choices=["open", "filled", "listed", "sold", "done", "cancel", "list"])
     td.add_argument("item", nargs="?", default="")
     td.add_argument("--price", type=float, help="per-unit price (buy for open, sell for listed/sold)")
     td.add_argument("--qty", type=int)
     td.add_argument("--ago", type=float, default=0, help="minutes ago the step happened")
+    td.add_argument("--buy", type=float, help="done: buy price per unit")
+    td.add_argument("--sell", type=float, help="done: sell price per unit")
+    td.add_argument("--fill-min", type=float, help="done: minutes the buy order took to fill")
+    td.add_argument("--sell-min", type=float, help="done: minutes the sell offer took to sell")
     td.set_defaults(fn=cmd_trade)
     ui = sub.add_parser("ui", help="open the dashboard in your browser")
     ui.add_argument("--port", type=int, default=8765)

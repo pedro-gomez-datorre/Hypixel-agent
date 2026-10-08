@@ -131,7 +131,7 @@ svg .lab { fill: var(--ink-2); }
         <th data-k="p_win" class="hide-sm">p(win)</th><th data-k="wins" class="hide-sm">Track record</th>
       </tr></thead><tbody></tbody></table></div>
     <div class="filters" style="margin:10px 0 0"><button type="button" id="showall" hidden></button></div>
-    <p class="sub" style="margin-top:8px">*Estimate from market flow. Your realized profit is usually lower: see "My trades".</p>
+    <p class="sub" id="real-note" style="margin-top:8px">*Estimate from market flow. Your realized profit is usually lower: see "My trades".</p>
     <div id="pwin-note" class="sub"></div>
   </section>
 
@@ -307,7 +307,7 @@ function barChart(host, items) {
 }
 
 /* ---------- state + rendering ---------- */
-let itemsMap = new Map(), showAll = false, cands = [], sortKey = null, sortDir = -1, selected = null, rangeH = 24, tableView = false, lastHist = null, lastTrades = [];
+let realFactor = 1, itemsMap = new Map(), showAll = false, cands = [], sortKey = null, sortDir = -1, selected = null, rangeH = 24, tableView = false, lastHist = null, lastTrades = [];
 const VERDICT_ICON = { flip: "M3 8.5l3 3 7-7", watch: "M8 3v6M8 12v.5", skip: "M4 4l8 8M12 4l-8 8" };
 function chip(v) {
   const s = el("span", { class: "chip " + v });
@@ -338,7 +338,7 @@ function renderCands() {
     const tr = document.createElement("tr"); if (c.name === selected) tr.className = "sel";
     tr.tabIndex = 0; tr.onclick = () => select(c.name); tr.onkeydown = e => { if (e.key === "Enter") select(c.name); };
     tr.append(td(c.name, "item"), td(chip(c.verdict)), td(pct(c.margin_pct), "num"),
-      td(fmt.format(c.ppu), "num hide-sm"), td(fmt.format(c.qty), "num hide-sm"), td(compact(c.profit_day), "num"),
+      td(fmt.format(c.ppu), "num hide-sm"), td(fmt.format(c.qty), "num hide-sm"), td(compact(c.profit_day * realFactor), "num"),
       td(riskCell(c.risk), "num"), td(c.p_win == null ? "–" : pct(c.p_win, 0), "num hide-sm"),
       td(c.judged ? `${c.wins}/${c.judged}` : "–", "num hide-sm"));
     tb.append(tr);
@@ -435,12 +435,16 @@ async function refresh() {
     const dot = $("#statusdot"); dot.className = "dot " + (age == null ? "bad" : age < 12 ? "ok" : "stale");
     $("#statustext").textContent = age == null ? "no data yet: start the agent" : age < 12 ? `live · last snapshot ${Math.round(age)} min ago` : `agent stopped? last snapshot ${age < 120 ? Math.round(age) + " min" : fmt1.format(age / 60) + " h"} ago`;
     const kp = $("#k-profit"); kp.textContent = o.trades_done ? fmt.format(o.profit) : "–"; kp.className = "value" + (o.profit > 0 ? " pos" : "");
-    $("#k-profit-note").textContent = o.trades_done ? `${o.trades_done} trades · ${o.profit >= 0 ? "+" : ""}${pct(o.profit / o.invested, 0)} on ${compact(o.invested)} invested · avg sell ${Math.round(o.avg_sell_min)} min` : "Log your flips with: trade open …";
+    $("#k-profit-note").textContent = o.trades_done ? `${o.trades_done} trades · ${o.profit >= 0 ? "+" : ""}${pct(o.profit / o.invested, 0)} on ${compact(o.invested)} invested · avg sell ${Math.round(o.avg_sell_min)} min${o.trades_cancelled ? ` · ${o.trades_cancelled} cancelled` : ""}` : "Log your flips with: trade open …";
     $("#k-cands").textContent = c.total ?? 0; $("#k-cands-note").textContent = c.items.length ? `${c.items.filter(x => x.verdict === "flip").length} flip · ${c.items.filter(x => x.verdict === "watch").length} watch · ${c.items.filter(x => x.verdict === "skip").length} skip` : "warming up";
     $("#k-data").textContent = o.data_hours < 1 ? Math.round(o.data_hours * 60) + " min" : fmt1.format(o.data_hours) + " h"; $("#k-data-note").textContent = `${compact(o.price_rows)} price rows`;
     $("#k-model").textContent = o.model ? "Active" : "Not active";
     $("#k-model-note").textContent = o.model ? `AUC ${o.model.auc_model} vs ${o.model.auc_heuristic} (rule-based)` : "Using the rule-based score. Needs about 500 labelled rows; run: train";
-    cands = c.items; lastTrades = t; renderCands(); drawTrades();
+    cands = c.items; lastTrades = t;
+    realFactor = c.realization ? c.realization.factor : 1;
+    $("#real-note").textContent = c.realization
+      ? `*Market-flow estimate scaled by ×${realFactor.toFixed(2)}: what your own ${c.realization.n} logged trades actually realized versus the predicted margin.`
+      : "*Estimate from market flow, not adjusted yet. Log 3 or more trades and it is scaled by what you actually realize."; renderCands(); drawTrades();
     if (selected) loadHistory();
   } catch (e) { showError(e.message); $("#statusdot").className = "dot bad"; $("#statustext").textContent = "error"; }
 }

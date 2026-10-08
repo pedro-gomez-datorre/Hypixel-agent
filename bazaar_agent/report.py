@@ -5,6 +5,7 @@ own history, is there enough history, how did past recommendations of this item 
 """
 from statistics import median
 
+from . import trades
 from .agent import BazaarAgent
 from .strategy import Pick
 
@@ -61,4 +62,8 @@ def render(agent: BazaarAgent, picks: list[Pick]) -> str:
         lines.append(f"[{verdict.upper():5}] {p.name}: buy order {p.bid:,.1f} -> sell offer {p.ask:,.1f}, "
                      f"profit/unit {p.ppu:,.0f}, ~{p.qty:,.0f} units/day, risk {p.risk:.0f}")
         lines += [f"        - {n}" for n in notes]
+    real = trades.realization(agent.store, agent.cfg.tax) if hasattr(agent, "store") else None
+    if real:
+        lines += ["", f"Your logged trades realize ~{real[0]:.0%} of the predicted margin (median of {real[1]}): "
+                      "expect less than the profit/day estimates above."]
     return "\n".join(lines)

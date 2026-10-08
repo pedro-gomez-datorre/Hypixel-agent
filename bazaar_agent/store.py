@@ -42,7 +42,10 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         have = {r[1] for r in self.db.execute("PRAGMA table_info(prices)")}
+        have_t = {r[1] for r in self.db.execute("PRAGMA table_info(trades)")}
         with self.db:
+            if "cancelled_at" not in have_t:
+                self.db.execute("ALTER TABLE trades ADD COLUMN cancelled_at REAL")
             for col in ("bid_amt", "bid_orders", "ask_amt", "ask_orders"):
                 if col not in have:
                     self.db.execute(f"ALTER TABLE prices ADD COLUMN {col} REAL")
