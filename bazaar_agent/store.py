@@ -27,7 +27,12 @@ CREATE TABLE IF NOT EXISTS trades (
 
 
 class Store:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, readonly: bool = False):
+        if readonly:  # the dashboard must never write or lock out the running agent
+            if not Path(path).is_file():
+                raise FileNotFoundError(f"{path} does not exist yet: start the agent first (run)")
+            self.db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+            return
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(path))

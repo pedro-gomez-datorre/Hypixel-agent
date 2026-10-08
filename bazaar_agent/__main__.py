@@ -128,6 +128,12 @@ def cmd_trade(cfg, args):
     print(f"ok: {item} {args.action}")
 
 
+def cmd_ui(cfg, args):
+    """Local dashboard (read-only) in the browser."""
+    from .ui import serve
+    serve(cfg, args.port, not args.no_open)
+
+
 def cmd_alert(cfg, args):
     """Notify on Discord when an item's price crosses a threshold."""
     name = args.name.strip().upper()
@@ -170,6 +176,10 @@ def main():
     td.add_argument("--qty", type=int)
     td.add_argument("--ago", type=float, default=0, help="minutes ago the step happened")
     td.set_defaults(fn=cmd_trade)
+    ui = sub.add_parser("ui", help="open the dashboard in your browser")
+    ui.add_argument("--port", type=int, default=8765)
+    ui.add_argument("--no-open", action="store_true", help="do not open the browser automatically")
+    ui.set_defaults(fn=cmd_ui)
     rp = sub.add_parser("report", help="rule-based review of the candidates (free, no API key)")
     rp.set_defaults(fn=cmd_report)
     an = sub.add_parser("analyze", help="Claude reviews the candidates with tools (costs API tokens)")

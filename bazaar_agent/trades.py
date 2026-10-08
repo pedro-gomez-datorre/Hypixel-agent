@@ -57,28 +57,40 @@ def mark_sold(store: Store, item: str, price: float | None = None, ago: float = 
     return tid
 
 
-def summary(store: Store, tax: float) -> str:
-    rows = store.db.execute(
-        "SELECT item, qty, buy_price, opened_at, filled_at, listed_at, sold_at, sold_price, sell_price "
-        "FROM trades ORDER BY id").fetchall()
-    if not rows:
-        return "No trades logged yet."
-    lines, done = [], []
-    for item, qty, buy, opened, filled, listed, sold, sold_price, sell_price in rows:
+def rows(store: Store, tax: float) -> list[dict]:
+    """Every trade with its stage and, once sold, net profit after tax."""
+    out = []
+    for (tid, item, qty, buy, opened, filled, listed, sold,
+         sold_price, sell_price) in store.db.execute(
+            "SELECT id, item, qty, buy_price, opened_at, filled_at, listed_at, sold_at, sold_price, sell_price "
+            "FROM trades ORDER BY id"):
+        d = {"id": tid, "item": item, "qty": qty, "buy_price": buy, "sell_price": sold_price or sell_price,
+             "stage": "sold" if sold else "listed" if listed else "filled" if filled else "buy order open",
+             "opened_at": opened, "fill_min": (filled - opened) / 60 if filled else None,
+             "sell_min": (sold - listed) / 60 if sold and listed else None,
+             "cost": buy * qty, "profit": None, "roi": None}
         if sold:
-            price = sold_price or sell_price
-            cost, revenue = buy * qty, price * qty * (1 - tax)
-            profit = revenue - cost
-            fill_m, sell_m = (filled - opened) / 60, (sold - listed) / 60
-            done.append((profit, cost, fill_m, sell_m))
-            lines.append(f"  {item:24} x{qty:<6} buy {buy:,.1f} -> sold {price:,.1f}  "
-                         f"profit {profit:>10,.0f} ({profit / cost:+.0%})  fill {fill_m:.0f}m  sell {sell_m:.0f}m")
+            d["profit"] = d["sell_price"] * qty * (1 - tax) - d["cost"]
+            d["roi"] = d["profit"] / d["cost"]
+        out.append(d)
+    return out
+
+
+def summary(store: Store, tax: float) -> str:
+    rs = rows(store, tax)
+    if not rs:
+        return "No trades logged yet."
+    lines = []
+    for r in rs:
+        if r["profit"] is not None:
+            lines.append(f"  {r['item']:24} x{r['qty']:<6} buy {r['buy_price']:,.1f} -> sold {r['sell_price']:,.1f}  "
+                         f"profit {r['profit']:>10,.0f} ({r['roi']:+.0%})  fill {r['fill_min']:.0f}m  sell {r['sell_min']:.0f}m")
         else:
-            stage = ("listed" if listed else "filled" if filled else "buy order open")
-            lines.append(f"  {item:24} x{qty:<6} buy {buy:,.1f}  [{stage}]")
+            lines.append(f"  {r['item']:24} x{r['qty']:<6} buy {r['buy_price']:,.1f}  [{r['stage']}]")
+    done = [r for r in rs if r["profit"] is not None]
     if done:
-        n = len(done)
-        total, cost = sum(d[0] for d in done), sum(d[1] for d in done)
+        n, total, cost = len(done), sum(r["profit"] for r in done), sum(r["cost"] for r in done)
         lines.append(f"\n{n} completed: profit {total:,.0f} on {cost:,.0f} invested ({total / cost:+.0%}), "
-                     f"avg fill {sum(d[2] for d in done) / n:.0f} min, avg sell {sum(d[3] for d in done) / n:.0f} min")
+                     f"avg fill {sum(r['fill_min'] for r in done) / n:.0f} min, "
+                     f"avg sell {sum(r['sell_min'] for r in done) / n:.0f} min")
     return "\n".join(lines)

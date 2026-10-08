@@ -105,3 +105,30 @@ def test_report_flags_spikes_and_short_history(tmp_path):
     agent.history["N"].append((0, 1000, 1100))
     new = evaluate(Quote("N", 1000, 1100, 5000, 5000), agent.history["N"], 0.0, agent.cfg)
     assert review(agent, new)[0] == "watch"
+
+
+def test_dashboard_data_functions(tmp_path):
+    import time
+    from bazaar_agent import trades, ui
+    from bazaar_agent.store import Store
+    cfg = Config(data_dir=tmp_path, min_samples=1)
+    s = Store(tmp_path / "bazaar.db")
+    now = time.time()
+    for k in range(6):
+        s.add_prices(now - (5 - k) * 300, [("X", 1000, 1300, 5000, 5000), ("THIN", 1000, 1005, 5000, 5000)])
+    trades.open_trade(s, "X", 2, 1000, ago=30); trades.mark_filled(s, "X", ago=25)
+    trades.mark_listed(s, "X", 1300, ago=24); trades.mark_sold(s, "X")
+    s.close()
+    ro = ui.open_store(cfg)
+    ov = ui.overview(cfg, ro)
+    assert ov["trades_done"] == 1 and ov["profit"] > 0 and ov["model"] is None
+    cands = ui.candidates(cfg, ro)
+    assert [c["name"] for c in cands["items"]] == ["X"]          # THIN fails the margin filter
+    assert cands["items"][0]["verdict"] in {"flip", "watch", "skip"}
+    h = ui.item_history(cfg, ro, "X", 24)
+    assert len(h["t"]) == 6 and h["margin"][0] > 0
+    assert ui.item_history(cfg, ro, "NOPE", 24)["t"] == []
+    import pytest
+    with pytest.raises(Exception):
+        ro.db.execute("INSERT INTO pending VALUES ('a',1,1)")      # read-only: the dashboard can't write
+    assert not ui.ITEM_RE.match("../etc") and ui.ITEM_RE.match("SAND:1")
